@@ -1,0 +1,240 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "A sample step function deployment using cft",
+  "Parameters": {
+    "env": {
+      "Default": "dev",
+      "Description": "Environment name",
+      "Type": "String"
+    }
+  },
+  "Resources": {
+    "CFTLambdaExecutionRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "RoleName": "CFTLambdaExecutionRole",
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": [
+                  "lambda.amazonaws.com"
+                ]
+              },
+              "Action": [
+                "sts:AssumeRole"
+              ]
+            }
+          ]
+        },
+        "Path": "/",
+        "Policies": [
+          {
+            "PolicyName": "cwlogs",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": "logs:CreateLogGroup",
+                  "Resource": {
+                    "Fn::Join": [
+                      ":",
+                      [
+                        "arn:aws:logs",
+                        {
+                          "Ref": "AWS::Region"
+                        },
+                        {
+                          "Ref": "AWS::AccountId"
+                        },
+                        "*"
+                      ]
+                    ]
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "logs:CreateLogStream",
+                    "logs:PutLogEvents"
+                  ],
+                  "Resource": [
+                    {
+                      "Fn::Join": [
+                        ":",
+                        [
+                          "arn:aws:logs",
+                          {
+                            "Ref": "AWS::Region"
+                          },
+                          {
+                            "Ref": "AWS::AccountId"
+                          },
+                          "log-group",
+                          "/aws/lambda/*",
+                          "*"
+                        ]
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "ValidateContactLambda": {
+      "Type": "AWS::Lambda::Function",
+      "Properties": {
+        "Handler": "index.handler",
+        "FunctionName": "validate-contact-lambda",
+        "Role": {
+          "Fn::GetAtt": [
+            "CFTLambdaExecutionRole",
+            "Arn"
+          ]
+        },
+        "Runtime": "nodejs12.x",
+        "Timeout": 5,
+        "Code": {
+          "ZipFile": {
+            "Fn::Join": [
+              "\n",
+              [
+                "exports.handler = async function (event, context) {",
+                "    console.log(JSON.stringify(event));",
+                "    return new Promise((resolve, reject) => {",
+                "       setTimeout(() => {",
+                "         console.log(event.contact);",
+                "         if (event.contact === 'Jinal') {",
+                "            resolve(true);",
+                "         } else {",
+                "           resolve(false);",
+                "         }",
+                "       }, 2000)",
+                "    })",
+                "}"
+              ]
+            ]
+          }
+        }
+      }
+    },
+    "SendNotificationLambda": {
+      "Type": "AWS::Lambda::Function",
+      "Properties": {
+        "Handler": "index.handler",
+        "FunctionName": "send-notification-lambda",
+        "Role": {
+          "Fn::GetAtt": [
+            "CFTLambdaExecutionRole",
+            "Arn"
+          ]
+        },
+        "Runtime": "nodejs12.x",
+        "Timeout": 5,
+        "Code": {
+          "ZipFile": {
+            "Fn::Join": [
+              "\n",
+              [
+                "exports.handler = async function (event, context) {",
+                "    console.log(JSON.stringify(event));",
+                "    console.log(event.isValidContact);",
+                "    if (event.isValidContact === true) {",
+                "      return `notification sent to valid contact`;",
+                "    } else {",
+                "      return `couldn't sent the notification`;",
+                "    }",
+                "}"
+              ]
+            ]
+          }
+        }
+      }
+    },
+    "StatesExecutionRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "RoleName": "StatesExecutionRole",
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": [
+                  {
+                    "Fn::Sub": "states.${AWS::Region}.amazonaws.com"
+                  }
+                ]
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "Path": "/",
+        "Policies": [
+          {
+            "PolicyName": "StatesExecutionPolicy",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "lambda:InvokeFunction"
+                  ],
+                  "Resource": "*"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "MyStateMachine": {
+      "Type": "AWS::StepFunctions::StateMachine",
+      "Properties": {
+        "StateMachineName": "NotifyToValidContact-StateMachine",
+        "StateMachineType": "STANDARD",
+        "Definition": {
+          "StartAt": "isContactValid",
+          "States": {
+            "isContactValid": {
+              "Type": "Task",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "ValidateContactLambda",
+                  "Arn"
+                ]
+              },
+              "ResultPath": "$.isValidContact",
+              "Next": "sendNotification"
+            },
+            "sendNotification": {
+              "Type": "Task",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "SendNotificationLambda",
+                  "Arn"
+                ]
+              },
+              "End": true
+            }
+          }
+        },
+        "RoleArn": {
+          "Fn::GetAtt": [
+            "StatesExecutionRole",
+            "Arn"
+          ]
+        }
+      }
+    }
+  }
+}
